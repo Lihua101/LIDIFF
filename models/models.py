@@ -188,16 +188,8 @@ class DiffusionPoints(LightningModule):
         
         # sample q at step t
         # we sample noise towards zero to then add to each point the noise (without normalizing the pcd)
-        
-        # numpy_array1 = batch['pcd_part'].cpu().numpy()
-        # np.save("weishangcaiyang.npy", numpy_array1)
-        
-        # numpy_array1 = batch['pcd_full'].cpu().numpy()
-        # np.save("shangcaiyang.npy", numpy_array1)
         t_sample = batch['pcd_full'] + self.q_sample(torch.zeros_like(batch['pcd_full']), t, noise)
         
-        # numpy_array2 = t_sample.cpu().numpy()
-        # np.save("999cijiazao.npy", numpy_array2)
 
         # replace the original points with the noise sampled
         x_full = self.points_to_tensor(t_sample, batch['mean'], batch['std'])

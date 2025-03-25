@@ -74,8 +74,8 @@ class DiffCompletion(LightningModule):
     def points_to_tensor(self, points):
         x_feats = ME.utils.batched_coordinates(list(points[:]), dtype=torch.float32, device=self.device)
 
-        x_coord = x_feats.clone()
-        x_coord = torch.round(x_coord / self.hparams['data']['resolution'])
+        x_coord = x_feats.clone()[:,:4].contiguous()
+        x_coord[:,1:] = torch.round(x_coord[:,1:4] / self.hparams['data']['resolution'])
 
         x_t = ME.TensorField(
             features=x_feats[:,1:],
@@ -90,28 +90,36 @@ class DiffCompletion(LightningModule):
         return x_t                                                                                        
 
     def reset_partial_pcd(self, x_part, x_uncond):
-        x_part = self.points_to_tensor(x_part.F.reshape(1,-1,3).detach())
-        x_uncond = self.points_to_tensor(torch.zeros_like(x_part.F.reshape(1,-1,3)))
+        x_part = self.points_to_tensor(x_part.F.reshape(1,-1,23).detach())
+        x_uncond = self.points_to_tensor(torch.zeros_like(x_part.F.reshape(1,-1,23)))
 
         return x_part, x_uncond
 
     def preprocess_scan(self, scan):
-        dist = np.sqrt(np.sum((scan)**2, -1))
-        scan = scan[(dist < self.hparams['data']['max_range']) & (dist > 3.5)][:,:3]
+        dist = np.sqrt(np.sum((scan[:,:3])**2, -1))
+        scan = scan[(dist < self.hparams['data']['max_range']) & (dist > 3.5)]
 
         # use farthest point sampling
         pcd_scan = o3d.geometry.PointCloud()
-        pcd_scan.points = o3d.utility.Vector3dVector(scan)
-        pcd_scan = pcd_scan.farthest_point_down_sample(int(self.hparams['data']['num_points'] / 10))
-        scan = torch.tensor(np.array(pcd_scan.points)).cuda()
-        
+        pcd_scan.points = o3d.utility.Vector3dVector(scan[:,:3])
+        pcd_scan_down = pcd_scan.farthest_point_down_sample(int(self.hparams['data']['num_points'] / 10))
+        # scan = torch.tensor(np.array(pcd_scan.points)).cuda()
+        pcd_tree = o3d.geometry.KDTreeFlann(pcd_scan)
+        pcd_scan_down = np.array(pcd_scan_down.points)
+        selected_indices = []
+        for point in pcd_scan_down:
+            _, idx, _ = pcd_tree.search_knn_vector_3d(point, 1)  # 搜索最近的点
+            selected_indices.append(idx[0])
+        selected_indices = np.array(selected_indices) 
+        scan = torch.tensor(scan[selected_indices]).cuda()
+
         scan = scan.repeat(10,1)
         scan = scan[None,:,:]
 
         return scan
 
     def postprocess_scan(self, completed_scan, input_scan):
-        dist = np.sqrt(np.sum((completed_scan)**2, -1))
+        dist = np.sqrt(np.sum((completed_scan[:,:3])**2, -1))
         post_scan = completed_scan[dist < self.hparams['data']['max_range']]
         max_z = input_scan[...,2].max().item()
         min_z = (input_scan[...,2].mean() - 2 * input_scan[...,2].std()).item()
@@ -151,7 +159,7 @@ class DiffCompletion(LightningModule):
             out = self.model(x_full, x_full_sparse, part_feat, t)
 
         torch.cuda.empty_cache()
-        return out.reshape(t.shape[0],-1,3)
+        return out.reshape(t.shape[0],-1,23)
 
     def classfree_forward(self, x_t, x_cond, x_uncond, t):
         x_t_sparse = x_t.sparse()
@@ -167,14 +175,18 @@ class DiffCompletion(LightningModule):
             t = self.dpm_scheduler.timesteps[t].cuda()[None]
 
             noise_t = self.classfree_forward(x_t, x_cond, x_uncond, t)
-            input_noise = x_t.F.reshape(t.shape[0],-1,3) - x_init
+            input_noise = x_t.F.reshape(t.shape[0],-1,23) - x_init
             x_t = x_init + self.dpm_scheduler.step(noise_t, t, input_noise)['prev_sample']
             x_t = self.points_to_tensor(x_t)
 
             x_cond, x_uncond = self.reset_partial_pcd(x_cond, x_uncond)
             torch.cuda.empty_cache()
-
-        return x_t.F.cpu().detach().numpy()
+        data = x_t.F
+        positions = data[:, :3]
+        class_probs = data[:, 3:]
+        predicted_classes = torch.argmax(class_probs, dim=1)
+        result = torch.cat([positions, predicted_classes.unsqueeze(1)], dim=1)
+        return result.cpu().detach().numpy()
 
 def load_pcd(pcd_file):
     if pcd_file.endswith('.bin'):

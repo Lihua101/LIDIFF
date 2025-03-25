@@ -98,7 +98,7 @@ def main(config, weights, checkpoint, test):
                           resume_from_checkpoint=checkpoint,
                           max_epochs= cfg['train']['max_epoch'],
                           callbacks=[lr_monitor, checkpoint_saver],
-                          check_val_every_n_epoch=1,
+                          check_val_every_n_epoch=5,
                           num_sanity_val_steps=0,
                           limit_val_batches=0.001,
                           accelerator='ddp',

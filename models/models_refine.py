@@ -69,7 +69,7 @@ class RefineDiffusion(LightningModule):
         refine_upsample_pcd = x_feats[:,None,:] + offset
         refine_upsample_pcd = refine_upsample_pcd.reshape(batch['pcd_full'].shape[0],-1,23)
 
-        loss, _ = chamfer_distance(refine_upsample_pcd[:,:3], torch.tensor(batch['pcd_full']))
+        loss, _ = chamfer_distance(refine_upsample_pcd[:,:,:3], torch.tensor(batch['pcd_full'][:,:,:3]))
         self.log('train/cd_loss', loss)
         torch.cuda.empty_cache()
 
